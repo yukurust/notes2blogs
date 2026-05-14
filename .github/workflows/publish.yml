@@ -19,12 +19,88 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Checkout
+      - name: Checkout repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Run
-        uses: C-Naoki/zenn-qiita-sync@main
+      # Converter のみ上流リポジトリから取得（ルートの package.json は触らない）
+      - name: Checkout zenn-qiita-sync (converter)
+        uses: actions/checkout@v4
+        with:
+          repository: C-Naoki/zenn-qiita-sync
+          path: _zqs
+          ref: main
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Get changed Zenn markdown files
+        id: changed
+        shell: bash
+        run: |
+          BEFORE="${{ github.event.before }}"
+          AFTER="${{ github.sha }}"
+          if [[ "$BEFORE" == "0000000000000000000000000000000000000000" ]] || [[ -z "$BEFORE" ]]; then
+            BEFORE="$(git rev-parse HEAD^ 2>/dev/null || true)"
+          fi
+          git diff --name-only "$BEFORE" "$AFTER" \
+            | grep '^articles/.*\.md$' > "$GITHUB_WORKSPACE/changed_files.txt" || true
+          echo '📋 Changed markdown files:'
+          if [[ -s "$GITHUB_WORKSPACE/changed_files.txt" ]]; then
+            cat "$GITHUB_WORKSPACE/changed_files.txt"
+            echo "has_files=true" >> "$GITHUB_OUTPUT"
+          else
+            echo '(none)'
+            echo "has_files=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Convert Zenn → Qiita
+        if: steps.changed.outputs.has_files == 'true'
+        shell: bash
+        run: |
+          npm install --no-package-lock --no-save @qiita/qiita-cli >/dev/null
+          while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            filename="$(basename "$file" .md)"
+            echo "🚀 Convert $file to Qiita format"
+            if [[ "$file" != articles/* ]]; then
+              echo "⚠️ invalid file path: $file"
+              if [[ -f "qiita/public/$filename.md" ]]; then
+                rm "qiita/public/$filename.md"
+              fi
+              continue
+            fi
+            if grep -q 'published: true' "$file"; then
+              if [[ ! -f "qiita/public/$filename.md" ]]; then
+                echo '🌱 Create new Qiita article stub'
+                (cd qiita && npx qiita new "$filename")
+              fi
+              echo "🚚 Convert $file to qiita/public/$filename.md"
+              node "$GITHUB_WORKSPACE/_zqs/dist/index.js" "$file" "./qiita/public/$filename.md"
+            fi
+          done < "$GITHUB_WORKSPACE/changed_files.txt"
+          rm -f "$GITHUB_WORKSPACE/changed_files.txt"
+
+      - name: Commit converted Qiita articles (if changed)
+        if: steps.changed.outputs.has_files == 'true'
+        shell: bash
+        run: |
+          git config --local user.name "${{ github.actor }}"
+          git config --local user.email "${{ github.actor }}@users.noreply.github.com"
+          git add qiita/public/*.md || true
+          if git diff --staged --quiet; then
+            echo 'No changes under qiita/public/ to commit; skipping commit/push.'
+            exit 0
+          fi
+          git commit -m "Convert Zenn articles to Qiita format"
+          git push
+
+      - name: Publish to Qiita
+        uses: increments/qiita-cli/actions/publish@v1
         with:
           qiita-token: ${{ secrets.QIITA_TOKEN }}
+          root: ./qiita
+          commit-message: "Updated by qiita-cli"
