@@ -6,6 +6,11 @@ on:
       - main
       - master
   workflow_dispatch:
+    inputs:
+      force_qiita_publish:
+        description: articles/ を変えていなくても Qiita へ publish する（全件・要トークン）
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -98,7 +103,9 @@ jobs:
           git commit -m "Convert Zenn articles to Qiita format"
           git push
 
+      # articles/ の差分がないプッシュではスキップ（ローカル id と Qiita 不整合で毎回 404 になるのを防ぐ）
       - name: Publish to Qiita
+        if: ${{ steps.changed.outputs.has_files == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_qiita_publish == 'true') }}
         uses: increments/qiita-cli/actions/publish@v1
         with:
           qiita-token: ${{ secrets.QIITA_TOKEN }}
