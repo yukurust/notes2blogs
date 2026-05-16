@@ -89,20 +89,7 @@ jobs:
           done < "$GITHUB_WORKSPACE/changed_files.txt"
           rm -f "$GITHUB_WORKSPACE/changed_files.txt"
 
-      - name: Commit converted Qiita articles (if changed)
-        if: steps.changed.outputs.has_files == 'true'
-        shell: bash
-        run: |
-          git config --local user.name "${{ github.actor }}"
-          git config --local user.email "${{ github.actor }}@users.noreply.github.com"
-          git add qiita/public/*.md || true
-          if git diff --staged --quiet; then
-            echo 'No changes under qiita/public/ to commit; skipping commit/push.'
-            exit 0
-          fi
-          git commit -m "Convert Zenn articles to Qiita format"
-          git push
-
+      # qiita/public は publish 成功後にのみコミットされる（id: null など中途半端な状態を main に載せない）
       # articles/ の差分がないプッシュではスキップ（ローカル id と Qiita 不整合で毎回 404 になるのを防ぐ）
       - name: Publish to Qiita
         if: ${{ steps.changed.outputs.has_files == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_qiita_publish == 'true') }}
