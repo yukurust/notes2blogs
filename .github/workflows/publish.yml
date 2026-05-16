@@ -16,7 +16,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.repository }}-mutations-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -95,6 +95,24 @@ jobs:
       # articles/ の差分がないプッシュではスキップ（ローカル id と Qiita 不整合で毎回 404 になるのを防ぐ）
       # デフォルトは「今回の push で published: true の articles に対応する記事のみ」publish（--all による無関係記事の巻き込みを防ぐ）
       # workflow_dispatch で force_qiita_publish かつ articles 変更が無いときだけ --all（従来どおり全件）
+
+      # Qiita 送信直前に updated_at をトリガーコミット基準で揃える（「Qiita 上より古い」ガード対策）
+      - name: Align updated_at before Qiita publish
+        if: ${{ steps.changed.outputs.has_files == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_qiita_publish == 'true') }}
+        shell: bash
+        env:
+          QIITA_SYNC_MODE: publish
+          AFTER_SHA: ${{ github.sha }}
+          TARGETS_FILE: ${{ github.workspace }}/qiita_publish_targets.txt
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          export PUBLISH_ALL=false
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" && "${{ github.event.inputs.force_qiita_publish }}" == "true" && "${{ steps.changed.outputs.has_files }}" != "true" ]]; then
+            export PUBLISH_ALL=true
+          fi
+          python3 .github/scripts/sync_qiita_public_updated_at.py
+
       - name: Publish to Qiita
         if: ${{ steps.changed.outputs.has_files == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_qiita_publish == 'true') }}
         shell: bash
