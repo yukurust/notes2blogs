@@ -67,6 +67,7 @@ jobs:
         shell: bash
         run: |
           npm install --no-package-lock --no-save @qiita/qiita-cli >/dev/null
+          rm -f "$GITHUB_WORKSPACE/qiita_publish_targets.txt"
           while IFS= read -r file; do
             [[ -z "$file" ]] && continue
             filename="$(basename "$file" .md)"
@@ -85,16 +86,43 @@ jobs:
               fi
               echo "🚚 Convert $file to qiita/public/$filename.md"
               node "$GITHUB_WORKSPACE/_zqs/dist/index.js" "$file" "./qiita/public/$filename.md"
+              echo "$filename" >> "$GITHUB_WORKSPACE/qiita_publish_targets.txt"
             fi
           done < "$GITHUB_WORKSPACE/changed_files.txt"
           rm -f "$GITHUB_WORKSPACE/changed_files.txt"
 
       # qiita/public は publish 成功後にのみコミットされる（id: null など中途半端な状態を main に載せない）
       # articles/ の差分がないプッシュではスキップ（ローカル id と Qiita 不整合で毎回 404 になるのを防ぐ）
+      # デフォルトは「今回の push で published: true の articles に対応する記事のみ」publish（--all による無関係記事の巻き込みを防ぐ）
+      # workflow_dispatch で force_qiita_publish かつ articles 変更が無いときだけ --all（従来どおり全件）
       - name: Publish to Qiita
         if: ${{ steps.changed.outputs.has_files == 'true' || (github.event_name == 'workflow_dispatch' && github.event.inputs.force_qiita_publish == 'true') }}
-        uses: increments/qiita-cli/actions/publish@v1
-        with:
-          qiita-token: ${{ secrets.QIITA_TOKEN }}
-          root: ./qiita
-          commit-message: "Updated by qiita-cli"
+        shell: bash
+        env:
+          QIITA_TOKEN: ${{ secrets.QIITA_TOKEN }}
+        run: |
+          set -euo pipefail
+          npm install -g @qiita/qiita-cli@1.8.0
+          cd "$GITHUB_WORKSPACE"
+          TARGETS_FILE="$GITHUB_WORKSPACE/qiita_publish_targets.txt"
+          # 手動・articles 未変更のときのみ全件
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]] && [[ "${{ github.event.inputs.force_qiita_publish }}" == "true" ]] && [[ "${{ steps.changed.outputs.has_files }}" != "true" ]]; then
+            echo "📤 Qiita: publish --all（workflow_dispatch / articles 差分なし）"
+            qiita publish --all --root ./qiita
+          elif [[ -s "$TARGETS_FILE" ]]; then
+            mapfile -t TARGETS < "$TARGETS_FILE"
+            echo "📤 Qiita: 変更のあった記事のみ publish（${#TARGETS[@]} 件）: ${TARGETS[*]}"
+            qiita publish "${TARGETS[@]}" --root ./qiita
+          else
+            echo "📭 Qiita publish 対象なし（published: true の articles 変更がないなど）。スキップします。"
+            exit 0
+          fi
+          git add qiita/public/*
+          if git diff --staged --quiet; then
+            echo "qiita/public にコミットする差分はありません。"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "Updated by qiita-cli"
+            git push
+          fi
