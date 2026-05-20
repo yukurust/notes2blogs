@@ -36,7 +36,7 @@ npm install
 
 ### 3. GitHubリポジトリにシークレット変数を登録
 
-`https://github.com/yshi112358/notes2blogs/settings/secrets/actions/new` にアクセスして、以下の情報を登録してください：
+`https://github.com/yukurust/notes2blogs/settings/secrets/actions/new` にアクセスして、以下の情報を登録してください：
 
 - **Name**: `QIITA_TOKEN`
 - **Secret**: 取得したQiitaのアクセストークン
